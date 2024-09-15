@@ -398,6 +398,54 @@ impl<'d, T: Instance> Qspi<'d, T, Async> {
 
         transfer.blocking_wait();
     }
+
+    /// Asynchronously read data, using DMA.
+    pub async fn read_dma(&mut self, buf: &mut [u8], transaction: TransferConfig) {
+        self.setup_transaction(QspiMode::IndirectWrite, &transaction, Some(buf.len()));
+
+        T::REGS.ccr().modify(|v| {
+            v.set_fmode(QspiMode::IndirectRead.into());
+        });
+        let current_ar = T::REGS.ar().read().address();
+        T::REGS.ar().write(|v| {
+            v.set_address(current_ar);
+        });
+
+        let transfer = unsafe {
+            self.dma
+                .as_mut()
+                .unwrap()
+                .read(T::REGS.dr().as_ptr() as *mut u8, buf, Default::default())
+        };
+
+        // STM32H7 does not have dmaen
+        #[cfg(not(stm32h7))]
+        T::REGS.cr().modify(|v| v.set_dmaen(true));
+
+        transfer.await
+    }
+
+    /// Asynchronously write data, using DMA.
+    pub async fn write_dma(&mut self, buf: &[u8], transaction: TransferConfig) {
+        self.setup_transaction(QspiMode::IndirectWrite, &transaction, Some(buf.len()));
+
+        T::REGS.ccr().modify(|v| {
+            v.set_fmode(QspiMode::IndirectWrite.into());
+        });
+
+        let transfer = unsafe {
+            self.dma
+                .as_mut()
+                .unwrap()
+                .write(buf, T::REGS.dr().as_ptr() as *mut u8, Default::default())
+        };
+
+        // STM32H7 does not have dmaen
+        #[cfg(not(stm32h7))]
+        T::REGS.cr().modify(|v| v.set_dmaen(true));
+
+        transfer.await
+    }
 }
 
 trait SealedInstance {
